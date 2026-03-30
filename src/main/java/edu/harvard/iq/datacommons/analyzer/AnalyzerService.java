@@ -37,12 +37,16 @@ public class AnalyzerService {
                     .collect(Collectors.toList());
 
             for (Path file : dataFiles) {
-                analyzeFile(file);
+                try {
+                    analyzeFile(file);
+                } catch (Exception e) {
+                    System.err.println("Failed to analyze " + file + ": " + e.getMessage());
+                }
             }
         }
     }
 
-    private void analyzeFile(Path file) {
+    private void analyzeFile(Path file) throws IOException {
         System.out.println("\nAnalyzing file: " + file);
         try {
             List<String> headers = new ArrayList<>();
@@ -87,18 +91,23 @@ public class AnalyzerService {
 
                 if (values.isEmpty()) continue;
 
-                if (!hasLocation && isLocation(label, values)) {
-                    hasLocation = true;
-                    System.out.println("Found location variable: " + label);
+                if (isLocation(label, values)) {
+                    if (!hasLocation) {
+                        hasLocation = true;
+                        System.out.println("Found location variable: " + label);
+                    }
                 }
-                if (!hasTime && isTime(label, values)) {
-                    hasTime = true;
-                    System.out.println("Found time/date variable: " + label);
+                if (isTime(label, values)) {
+                    if (!hasTime) {
+                        hasTime = true;
+                        System.out.println("Found time/date variable: " + label);
+                    }
                 }
             }
 
             if (hasLocation && hasTime) {
                 System.out.println("RESULT: File " + file.getFileName() + " meets requirements (Has Location AND Time).");
+                copyToDataCommonsReady(file);
             } else {
                 System.out.println("RESULT: File " + file.getFileName() + " DOES NOT meet requirements.");
                 if (!hasLocation) System.out.println(" - Missing Location");
@@ -107,15 +116,27 @@ public class AnalyzerService {
 
         } catch (IOException e) {
             System.err.println("Error reading file " + file + ": " + e.getMessage());
+            throw e;
         }
+    }
+
+    private void copyToDataCommonsReady(Path file) throws IOException {
+        Path root = Paths.get(searchRoot);
+        Path relativePath = root.relativize(file);
+        Path target = Paths.get("DataCommonsReady").resolve(relativePath);
+
+        System.out.println("Copying to: " + target);
+        Files.createDirectories(target.getParent());
+        Files.copy(file, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
 
     private boolean isLocation(String label, List<String> values) {
         String prompt = String.format(
-                "Is the following variable a location (e.g., city, country, coordinates, address, latitude, longitude)?\n" +
+                "Is the following variable a location (e.g., city, country, coordinates, address, latitude, longitude, ISO country code)?\n" +
                 "Variable Label: %s\n" +
                 "Sample Values: %s\n" +
-                "Think carefully. If it's a coordinate like latitude or longitude, or a name of a geographical entity, it IS a location.\n" +
+                "Think carefully. If it's a coordinate like latitude or longitude, or a name of a geographical entity (country, state, province, city), or a standard geographical code, it IS a location.\n" +
+                "Common location labels: 'country', 'state', 'city', 'lat', 'long', 'latitude', 'longitude', 'countrycode', 'iso3', 'fips'.\n" +
                 "Respond with only 'YES' or 'NO'. Do not explain.",
                 label, values.toString());
         String response = chatModel.generate(prompt);
@@ -124,10 +145,12 @@ public class AnalyzerService {
 
     private boolean isTime(String label, List<String> values) {
         String prompt = String.format(
-                "Is the following variable a time or date (e.g., year, month, timestamp, date, '2023-01-01', '12:00')?\n" +
+                "Is the following variable a time or date (e.g., year, month, timestamp, date, '2023-01-01', '12:00', or a numeric representation of a year)?\n" +
                 "Variable Label: %s\n" +
                 "Sample Values: %s\n" +
-                "Think carefully. If the label is 'date', 'year', 'year' (as a number), 'time', or similar, or if it represents a specific point in time, a duration, or a calendar value, it IS a time/date variable.\n" +
+                "Think carefully. If the label is 'date', 'year', 'time', or similar, or if it represents a specific point in time, a duration, or a calendar value, it IS a time/date variable.\n" +
+                "Numeric years (e.g., 1980, 2024) are definitely time/date variables.\n" +
+                "Common time labels: 'year', 'date', 'time', 'timestamp', 'month', 'quarter', 'day'.\n" +
                 "Respond with only 'YES' or 'NO'. Do not explain.",
                 label, values.toString());
         String response = chatModel.generate(prompt);
